@@ -5,6 +5,7 @@ dm-reverb
 moviepy==1.0.3
 numpy==1.26.4
 pandas==2.2.1
+Pillow==9.4.0
 opencv-python ## for cv2
 tensorflow==2.15.0
 tensorflow_datasets==4.9.2
@@ -12,7 +13,6 @@ moviepy>=1.0.3
 einops==0.8.0
 huggingface
 datasets
-Pillow==9.4.0
 rlds
 wandb
 hydra-core==1.1.1
