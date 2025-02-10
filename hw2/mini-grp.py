@@ -24,13 +24,14 @@ def get_batch_grp(split, dataset, batch_size):
 
 
 @torch.no_grad()
-def estimate_loss(model):
+def estimate_loss(model, device):
     out = {}
     model.eval()
     for split in ['train', 'val']:
-        losses = torch.zeros(model._cfg.eval_iters)
+        losses = torch.zeros(model._cfg.eval_iters).to(device)
         for k in range(model._cfg.eval_iters):
             X, x_goal, x_goal_img, Y = get_batch_grp(split, model._dataset, model._cfg.batch_size)
+            #X, x_goal, x_goal_img, Y = X.to(device), x_goal.to(device), x_goal_img.to(device), Y.to(device)
             logits, loss = model(X, x_goal, x_goal_img, Y)
             losses[k] = loss.item()
         out[split] = losses.mean()
@@ -39,9 +40,7 @@ def estimate_loss(model):
 
 def get_patches_fast(images):
     from einops import rearrange
-    batch_size, channels, height, width = images.shape
-    print("WHATHEFUCK")
-    print(batch_size, channels, height, width)
+    batch_size, height, width, channels = images.shape
     patch_size = height // 8 ## n_patches = 8
 
     patches = rearrange(images, 'b (h p1) (w p2) c -> b (h w) (p1 p2 c)', p1 = patch_size, p2 = patch_size)
@@ -184,35 +183,38 @@ class GRP(nn.Module):
       return torch.cat((mask1, mask2), dim=0)
 
   def forward(self, images, goals_txt, goal_imgs, targets=None):
+    images, goals_txt, goal_imgs = images.to(self._cfg.device), goals_txt.to(self._cfg.device), goal_imgs.to(self._cfg.device)
+    if targets is not None:
+        targets = targets.to(self._cfg.device)
     # Dividing images into patches
-    n, c, h, w = images.shape
+    n, h, w, c = images.shape
     # TODO:
     ## Provide the logic to produce the output and loss for the GRP
 
     B, T1 = goals_txt.shape
     # Map the vector corresponding to each patch to the hidden size dimension
-    patches = get_patches_fast(images)
+    patches = get_patches_fast(images).to(self._cfg.device)
     patches = self.patch_embd(patches)
     goals_txt = self.txt_embd(goals_txt)
-    goal_patches = get_patches_fast(goal_imgs)
+    goal_patches = get_patches_fast(goal_imgs).to(self._cfg.device)
     goal_patches = self.patch_embd(goal_patches)
 
     # Adding classification and goal_img tokens to the tokens
-    cls_tokens = self.cls_token.expand(B, -1, -1)
-    input_embd = torch.cat((goals_txt, goal_patches, patches, cls_tokens), dim=1)
+    cls_tokens = self.cls_token.expand(B, -1, -1).to(self._cfg.device)
+    input_embd = torch.cat((goals_txt, goal_patches, patches, cls_tokens), dim=1).to(self._cfg.device)
 
     # Adding positional embedding
-    input_embd = input_embd + calc_positional_embeddings(input_embd.shape[1], self._cfg.n_embd)
+    input_embd = input_embd + calc_positional_embeddings(input_embd.shape[1], self._cfg.n_embd).to(self._cfg.device)
 
     # Compute blocked masks
     B, T2, C = goal_patches.shape
     B, T3, C = patches.shape
-    masks = self.compute_block_mask(B, T1, T2, T3, targets)
+    masks = self.compute_block_mask(B, T1, T2, T3, targets).to(self._cfg.device)
 
     # Transformer Blocks
     x = input_embd
     for transfo in self.transformers:
-        x = transfo(x)
+        x = transfo(x, masks)
 
     # Getting the classification token only
     out_cls = x[:, -1, :]
@@ -221,9 +223,12 @@ class GRP(nn.Module):
     out = self.mlp(out_cls)
 
     if self._cfg.discrete:
-        loss = torch.nn.CrossEntropyLoss()(out, targets)
+        loss = torch.nn.CrossEntropyLoss()
     else:
-        loss = torch.nn.MSELoss()(out, targets)
+        loss = torch.nn.MSELoss()
+
+    if targets is not None:
+        loss = loss(out, targets)
 
     return (out, loss)
 
@@ -276,6 +281,12 @@ def my_main(cfg: DictConfig):
         else:
             return actions
 
+    def decode_action(actions):
+        if cfg.discrete:
+            pass
+        else:
+            return actions
+
     ## Get the actions and encode them to map to [-1, 1]
     encode_state = lambda af:   ((af/(255.0)*2.0)-1.0).astype(np.float32) # encoder: take a float, output an integer
     resize_state = lambda sf:   cv2.resize(np.array(sf, dtype=np.float32), (cfg.image_shape[0], cfg.image_shape[1]))  # resize state
@@ -319,7 +330,7 @@ def my_main(cfg: DictConfig):
     if cfg.simEval:
         import simpler_env
         from simpler_env.utils.env.observation_utils import get_image_from_maniskill2_obs_dict
-        task_name = "widowx_carrot_on_plate"  # @param ["google_robot_pick_coke_can", "google_robot_move_near", "google_robot_open_drawer", "google_robot_close_drawer", "widowx_spoon_on_towel", "widowx_carrot_on_plate", "widowx_stack_cube", "widowx_put_eggplant_in_basket"]
+        task_name = "widowx_carrot_on_plate"  # ["google_robot_pick_coke_can", "google_robot_move_near", "google_robot_open_drawer", "google_robot_close_drawer", "widowx_spoon_on_towel", "widowx_carrot_on_plate", "widowx_stack_cube", "widowx_put_eggplant_in_basket"]
         if 'env' in locals():
             print("Closing existing env")
             env.close()
@@ -330,7 +341,7 @@ def my_main(cfg: DictConfig):
     for iter in range(cfg.max_iters):
 
         if iter % cfg.eval_interval == 0 or iter == cfg.max_iters - 1:
-            losses = estimate_loss(model)
+            losses = estimate_loss(model, device)
             print(f"step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
             if not cfg.testing:
                 wandb.log({"train loss": losses['train'], "val loss": losses['val']})

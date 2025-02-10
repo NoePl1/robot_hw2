@@ -43,7 +43,7 @@ n_head: 16
 n_blocks: 4
 dropout: 0.2
 action_bins: 10
-action_dim: 6
+action_dim: 7
 discrete: false
 load_action_bounds: true
 env:
