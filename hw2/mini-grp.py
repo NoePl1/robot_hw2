@@ -227,14 +227,14 @@ class GRP(nn.Module):
 
     return (out, loss)
 
-import hydra, json
+#import hydra, json
 from omegaconf import DictConfig, OmegaConf
 
 # @hydra.main(config_path="conf", config_name="grp-mini")
-@hydra.main(config_path="./conf", config_name="bridge-64-light")
+#@hydra.main(config_path="./conf", config_name="bridge-64-light")
 def my_main(cfg: DictConfig):
     torch.manual_seed(cfg.r_seed)
-    log_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
+    #log_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
     print ("cfg:", OmegaConf.to_yaml(cfg))
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print("Using device: ", device, f"({torch.cuda.get_device_name(device)})" if torch.cuda.is_available() else "")
@@ -365,9 +365,9 @@ def my_main(cfg: DictConfig):
                     wandb.log({"avg reward": np.mean(rewards)})
                 import moviepy.editor as mpy
                 clip = mpy.ImageSequenceClip(list(frames), fps=20)
-                clip.write_videofile(log_dir+"/sim-env-"+str(iter)+".mp4", fps=20)
+                #clip.write_videofile(log_dir+"/sim-env-"+str(iter)+".mp4", fps=20)
                 if not cfg.testing:
-                    wandb.log({"example": wandb.Video(log_dir+"/sim-env-"+str(iter)+".mp4")})
+                    #wandb.log({"example": wandb.Video(log_dir+"/sim-env-"+str(iter)+".mp4")})
 
         # sample a batch of data
         xb, xg, xgi, yb = get_batch_grp('train', dataset_tmp, cfg.batch_size)
