@@ -40,6 +40,8 @@ def estimate_loss(model):
 def get_patches_fast(images):
     from einops import rearrange
     batch_size, channels, height, width = images.shape
+    print("WHATHEFUCK")
+    print(batch_size, channels, height, width)
     patch_size = height // 8 ## n_patches = 8
 
     patches = rearrange(images, 'b (h p1) (w p2) c -> b (h w) (p1 p2 c)', p1 = patch_size, p2 = patch_size)
@@ -69,7 +71,6 @@ class Head(nn.Module):
         B,T,C = x.shape
         # TODO: 
         ## Provide the block masking
-        pass
         k = self.key(x)   # (B,T,C)
         q = self.query(x) # (B,T,C)
         # compute attention scores ("affinities")
@@ -136,10 +137,21 @@ class GRP(nn.Module):
     self._cfg = cfg
     # TODO: 
     ## Provide the logic for the GRP network
-
+    self.patch_length = (self._cfg.image_shape[0] * self._cfg.image_shape[1] * self._cfg.image_shape[2]) // (self._cfg.n_patches**2)
+    self.patch_embd = nn.Linear(self.patch_length, self._cfg.n_embd)
+    self.txt_embd = nn.Embedding(self._cfg.vocab_size, self._cfg.n_embd)
+    self.cls_token = nn.Parameter(torch.randn(1, 1, self._cfg.n_embd))  # (1, 1, D)
     # 4) Transformer encoder blocks
+    self.transformers = nn.ModuleList([Block(n_embd=self._cfg.n_embd, n_head=self._cfg.n_head, dropout=self._cfg.dropout) for _ in range(self._cfg.n_blocks)])
 
     # 5) Classification MLPk
+    self.mlp = nn.Sequential(
+            nn.Linear(self._cfg.n_embd, self._cfg.n_embd*mlp_ratio),
+            nn.ReLU(),
+            nn.Linear( self._cfg.n_embd*mlp_ratio, self._cfg.n_embd),
+            nn.ReLU(),
+            nn.Linear(self._cfg.n_embd,  self._cfg.action_dim)
+        )
 
   def _init_weights(self, module):
       if isinstance(module, nn.Linear):
@@ -149,26 +161,70 @@ class GRP(nn.Module):
       elif isinstance(module, nn.Embedding):
           torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
+  def compute_block_mask(self, B, T1, T2, T3, targets):
+      mask1 = torch.ones(T1 + T2 + T3 + 1, T1 + T2 + T3 + 1)
+      mask1[:, -1] = 0
+      if targets is not None:
+          mask1[0:T1, :] = 0
+          mask1[:, 0:T1] = 0
+
+      mask2 = torch.ones(T1 + T2 + T3 + 1, T1 + T2 + T3 + 1)
+      mask2[:, -1] = 0
+      if targets is not None:
+          mask2[T1:T1 + T2, :] = 0
+          mask2[:, T1:T1 + T2] = 0
+
+      if B % 2 == 0:
+          mask1 = mask1.expand(B // 2, -1, -1)
+          mask2 = mask2.expand(B // 2, -1, -1)
+      else:
+          mask1 = mask1.expand((B // 2) + 1, -1, -1)
+          mask2 = mask2.expand(B // 2, -1, -1)
+
+      return torch.cat((mask1, mask2), dim=0)
+
   def forward(self, images, goals_txt, goal_imgs, targets=None):
     # Dividing images into patches
     n, c, h, w = images.shape
-    B, T = goals_txt.shape
-    # TODO: 
+    # TODO:
     ## Provide the logic to produce the output and loss for the GRP
-    
+
+    B, T1 = goals_txt.shape
     # Map the vector corresponding to each patch to the hidden size dimension
+    patches = get_patches_fast(images)
+    patches = self.patch_embd(patches)
+    goals_txt = self.txt_embd(goals_txt)
+    goal_patches = get_patches_fast(goal_imgs)
+    goal_patches = self.patch_embd(goal_patches)
 
     # Adding classification and goal_img tokens to the tokens
+    cls_tokens = self.cls_token.expand(B, -1, -1)
+    input_embd = torch.cat((goals_txt, goal_patches, patches, cls_tokens), dim=1)
 
     # Adding positional embedding
+    input_embd = input_embd + calc_positional_embeddings(input_embd.shape[1], self._cfg.n_embd)
 
     # Compute blocked masks
+    B, T2, C = goal_patches.shape
+    B, T3, C = patches.shape
+    masks = self.compute_block_mask(B, T1, T2, T3, targets)
 
     # Transformer Blocks
+    x = input_embd
+    for transfo in self.transformers:
+        x = transfo(x)
 
     # Getting the classification token only
+    out_cls = x[:, -1, :]
 
     # Compute output and loss
+    out = self.mlp(out_cls)
+
+    if self._cfg.discrete:
+        loss = torch.nn.CrossEntropyLoss()(out, targets)
+    else:
+        loss = torch.nn.MSELoss()(out, targets)
+
     return (out, loss)
 
 import hydra, json
