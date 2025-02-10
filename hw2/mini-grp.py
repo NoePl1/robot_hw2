@@ -270,6 +270,12 @@ def my_main(cfg: DictConfig):
     # TODO: 
     ## Provide the logic for the GRP policy for discretized or continuous actions
 
+    def encode_action(actions):
+        if cfg.discrete:
+            pass
+        else:
+            return actions
+
     ## Get the actions and encode them to map to [-1, 1]
     encode_state = lambda af:   ((af/(255.0)*2.0)-1.0).astype(np.float32) # encoder: take a float, output an integer
     resize_state = lambda sf:   cv2.resize(np.array(sf, dtype=np.float32), (cfg.image_shape[0], cfg.image_shape[1]))  # resize state
@@ -368,6 +374,7 @@ def my_main(cfg: DictConfig):
                 #clip.write_videofile(log_dir+"/sim-env-"+str(iter)+".mp4", fps=20)
                 if not cfg.testing:
                     #wandb.log({"example": wandb.Video(log_dir+"/sim-env-"+str(iter)+".mp4")})
+                    pass
 
         # sample a batch of data
         xb, xg, xgi, yb = get_batch_grp('train', dataset_tmp, cfg.batch_size)
@@ -385,5 +392,6 @@ def my_main(cfg: DictConfig):
     return losses['val']
 
 if __name__ == "__main__":
-    results = my_main()
+    loaded = OmegaConf.load("/content/robot_hw2/hw2/conf/bridge-64-light.yaml")
+    results = my_main(loaded)
     print("results:", results)

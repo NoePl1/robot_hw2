@@ -30,7 +30,7 @@ learning_rate: 5e-5
 eval_iters: 200
 
 n_embd: 256
-device: "cpu"
+device: "cuda"
 testing: true
 simEval: true
 eval_vid_iters: 1000
