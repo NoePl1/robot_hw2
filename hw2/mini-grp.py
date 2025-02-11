@@ -142,15 +142,23 @@ class GRP(nn.Module):
     self.cls_token = nn.Parameter(torch.randn(1, 1, self._cfg.n_embd))  # (1, 1, D)
     # 4) Transformer encoder blocks
     self.transformers = nn.ModuleList([Block(n_embd=self._cfg.n_embd, n_head=self._cfg.n_head, dropout=self._cfg.dropout) for _ in range(self._cfg.n_blocks)])
-
+    self.masks = None
     # 5) Classification MLPk
-    self.mlp = nn.Sequential(
-            nn.Linear(self._cfg.n_embd, self._cfg.n_embd*mlp_ratio),
+    if self._cfg.discrete:
+        self.mlp= nn.Sequential(
+            nn.Linear(self._cfg.n_embd, self._cfg.n_embd * mlp_ratio),
             nn.ReLU(),
-            nn.Linear( self._cfg.n_embd*mlp_ratio, self._cfg.n_embd),
-            nn.ReLU(),
-            nn.Linear(self._cfg.n_embd,  self._cfg.action_dim)
+            nn.Linear(self._cfg.n_embd * mlp_ratio, self._cfg.action_dim),
+            nn.Softmax(dim=-1)
         )
+        self.loss = torch.nn.CrossEntropyLoss()
+    else:
+        self.mlp_continuous = nn.Sequential(
+            nn.Linear(self._cfg.n_embd, self._cfg.n_embd * mlp_ratio),
+            nn.ReLU(),
+            nn.Linear(self._cfg.n_embd * mlp_ratio, self._cfg.action_dim)
+        )
+        self.loss = torch.nn.MSELoss()
 
   def _init_weights(self, module):
       if isinstance(module, nn.Linear):
@@ -207,28 +215,25 @@ class GRP(nn.Module):
     input_embd = input_embd + calc_positional_embeddings(input_embd.shape[1], self._cfg.n_embd).to(self._cfg.device)
 
     # Compute blocked masks
-    B, T2, C = goal_patches.shape
-    B, T3, C = patches.shape
-    masks = self.compute_block_mask(B, T1, T2, T3, targets).to(self._cfg.device)
+    if self.masks is None:
+        B, T2, C = goal_patches.shape
+        B, T3, C = patches.shape
+        self.masks = self.compute_block_mask(B, T1, T2, T3, targets).to(self._cfg.device)
 
     # Transformer Blocks
     x = input_embd
     for transfo in self.transformers:
-        x = transfo(x, masks)
+        x = transfo(x, self.masks)
 
     # Getting the classification token only
     out_cls = x[:, -1, :]
 
     # Compute output and loss
     out = self.mlp(out_cls)
-
-    if self._cfg.discrete:
-        loss = torch.nn.CrossEntropyLoss()
-    else:
-        loss = torch.nn.MSELoss()
-
     if targets is not None:
-        loss = loss(out, targets)
+        loss = self.loss(out, targets)
+    else:
+        loss = None
 
     return (out, loss)
 
@@ -276,16 +281,24 @@ def my_main(cfg: DictConfig):
     ## Provide the logic for the GRP policy for discretized or continuous actions
 
     def encode_action(actions):
+        cfg.a_std, cfg.a_mean = (actions.std(axis=0) + 0.001) * 2, actions.mean(axis=0)
+        actions = ((actions - cfg.a_mean) / cfg.a_std).astype(np.float32)
         if cfg.discrete:
-            pass
-        else:
-            return actions
+            num_bins = cfg.action_bins
+            bin_edges = np.linspace(-1, 1, num_bins + 1)
+            discrete_actions = np.digitize(actions, bins=bin_edges, right=False) - 1
+            discrete_actions = np.clip(discrete_actions, 0, num_bins - 1)
+            return discrete_actions
+        return actions
 
-    def decode_action(actions):
+    def decode_action(encoded_actions):
         if cfg.discrete:
-            pass
-        else:
-            return actions
+            num_bins = cfg.action_bins
+            bin_edges = np.linspace(-1, 1, num_bins + 1)
+            bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+            encoded_actions = bin_centers[encoded_actions]
+        decoded_actions = (encoded_actions * cfg.a_std) + cfg.a_mean
+        return decoded_actions
 
     ## Get the actions and encode them to map to [-1, 1]
     encode_state = lambda af:   ((af/(255.0)*2.0)-1.0).astype(np.float32) # encoder: take a float, output an integer
