@@ -145,17 +145,17 @@ class GRP(nn.Module):
     self.masks = None
     # 5) Classification MLPk
     if self._cfg.discrete:
-        self.mlp= nn.Sequential(
+        self.mlp = nn.Sequential(
             nn.Linear(self._cfg.n_embd, self._cfg.n_embd * mlp_ratio),
             nn.ReLU(),
             nn.Linear(self._cfg.n_embd * mlp_ratio, self._cfg.action_dim * self._cfg.action_bins),
-            nn.Unflatten(1, (self._cfg.action_dim, self._cfg.action_bins)),
-            #nn.Softmax(dim=-1)
+            nn.Unflatten(1, (self._cfg.action_bins, self._cfg.action_dim)),
+            nn.Softmax(dim=1)
         )
-        self.softmax = nn.Softmax(dim=-1)
+        #self.softmax = nn.Softmax(dim=-1)
         self.loss = torch.nn.CrossEntropyLoss()
     else:
-        self.mlp_continuous = nn.Sequential(
+        self.mlp = nn.Sequential(
             nn.Linear(self._cfg.n_embd, self._cfg.n_embd * mlp_ratio),
             nn.ReLU(),
             nn.Linear(self._cfg.n_embd * mlp_ratio, self._cfg.action_dim)
@@ -211,13 +211,18 @@ class GRP(nn.Module):
 
     # Adding classification and goal_img tokens to the tokens
     cls_tokens = self.cls_token.expand(B, -1, -1).to(self._cfg.device)
+
     input_embd = torch.cat((goals_txt, goal_patches, patches, cls_tokens), dim=1).to(self._cfg.device)
 
     # Adding positional embedding
     input_embd = input_embd + calc_positional_embeddings(input_embd.shape[1], self._cfg.n_embd).to(self._cfg.device)
 
     # Compute blocked masks
-    if self.masks is None:
+    if self.masks is None :
+        B, T2, C = goal_patches.shape
+        B, T3, C = patches.shape
+        self.masks = self.compute_block_mask(B, T1, T2, T3, targets).to(self._cfg.device)
+    if self.masks.shape[0] != B:
         B, T2, C = goal_patches.shape
         B, T3, C = patches.shape
         self.masks = self.compute_block_mask(B, T1, T2, T3, targets).to(self._cfg.device)
@@ -233,12 +238,14 @@ class GRP(nn.Module):
     # Compute output and loss
     out = self.mlp(out_cls)
     if targets is not None:
+        print('---------OUT---------')
+        print(out)
         loss = self.loss(out, targets)
     else:
         loss = None
 
     if self._cfg.discrete:
-        out = torch.argmax(self.softmax(out), dim=-1)
+        out = torch.argmax(out, dim=1)
 
     return (out, loss)
 
@@ -268,8 +275,8 @@ def my_main(cfg: DictConfig):
         "goal_img": np.array(dataset["goal_img"]),
         "goal": dataset["goal"]
     }
-    shortest_text_len = min([len(txt) for txt in dataset["goal"]])
-    cfg.block_size = shortest_text_len
+    #shortest_text_len = min([len(txt) for txt in dataset["goal"]])
+    #cfg.block_size = shortest_text_len
 
     # here are all the unique characters that occur in this text
     chars = sorted(list(set([item for row in dataset_tmp["goal"] for item in row]))) ## Flatten to a long string
@@ -285,12 +292,17 @@ def my_main(cfg: DictConfig):
 
     tokenizer = T5Tokenizer.from_pretrained("google-t5/t5-small")
 
-    def encode_txt():
+    def encode_txt(data):
         if cfg.use_T5:
-            encoded_txt = tokenizer(dataset_tmp["goal"], padding="longest", truncation=True, max_length=cfg.block_size, return_tensors='pt')
+            encoded_txt = tokenizer(data, padding="longest", return_tensors='pt')
             return encoded_txt.input_ids
         else:
-            return [stoi[c] for c in dataset_tmp["goal"]]  # text encoder to tokens:
+            shortest_text_len = min([len(txt) for txt in data])
+            cfg.block_size = shortest_text_len
+            tokenized_texts = []
+            for text in data:
+                tokenized_texts.append([stoi[c] for c in text[:cfg.block_size]])
+            return tokenized_texts
 
     def decode_txt(encoded_list):
         if cfg.use_T5:
@@ -312,7 +324,7 @@ def my_main(cfg: DictConfig):
             bin_edges = np.linspace(-1, 1, num_bins + 1)
             discrete_actions = np.digitize(actions, bins=bin_edges, right=False) - 1
             #discrete_actions = np.clip(discrete_actions, 0, num_bins - 1)
-            return discrete_actions
+            return discrete_actions.astype(int)
         return actions
 
     def decode_action(encoded_actions):
@@ -335,14 +347,14 @@ def my_main(cfg: DictConfig):
             "img": torch.tensor(encode_state(dataset_tmp["img"][:n])).to(device),
             "action": torch.tensor(encode_action(dataset_tmp["action"][:n]), dtype=torch.float).to(device),            
             "goal_img": torch.tensor(encode_state(dataset_tmp["goal_img"][:n])).to(device),
-            "goal": torch.tensor([encode_txt(goal[:cfg.block_size]) for goal in dataset_tmp["goal"][:n]]).to(device)
+            "goal": torch.tensor(encode_txt(dataset_tmp["goal"][:n])).to(device)
             },
         "test": 
         {
             "img": torch.tensor(encode_state(dataset_tmp["img"][n:])).to(device),
             "action": torch.tensor(encode_action(dataset_tmp["action"][n:]), dtype=torch.float).to(device),            
             "goal_img": torch.tensor(encode_state(dataset_tmp["goal_img"][n:])).to(device),
-            "goal": torch.tensor([encode_txt(goal[:cfg.block_size]) for goal in dataset_tmp["goal"][n:]]).to(device)
+            "goal": torch.tensor(encode_txt(dataset_tmp["goal"][:n])).to(device)
         }
     }
 
@@ -398,7 +410,7 @@ def my_main(cfg: DictConfig):
                         image = get_image_from_maniskill2_obs_dict(env_unwrapped, obs)
                         image = image[:,:,:3] ## Remove last dimension of image color
                         action, loss = model.forward(torch.tensor(np.array([encode_state(resize_state(image))])).to(device)
-                                            ,torch.tensor(np.array([encode_txt(instruction)[:cfg.block_size]])).to(device) ## There can be issues here if th text is shorter than any example in the dataset
+                                            ,torch.tensor(np.array(encode_txt([instruction]))).to(device) ## There can be issues here if th text is shorter than any example in the dataset
                                             ,torch.tensor(np.array([encode_state(resize_state(image))])).to(device) ## Not the correct goal image... Should mask this.
                                             )
                         # action = env.action_space.sample() # replace this with your policy inference
