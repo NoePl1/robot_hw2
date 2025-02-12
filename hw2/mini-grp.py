@@ -5,11 +5,11 @@ from torch.optim import Adam
 from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader
 
+from transformers import T5Tokenizer
 import tensorflow_datasets as tfds
 import numpy as np
 from tqdm import tqdm, trange
 import cv2
-
 
 # data loading
 def get_batch_grp(split, dataset, batch_size):
@@ -148,9 +148,11 @@ class GRP(nn.Module):
         self.mlp= nn.Sequential(
             nn.Linear(self._cfg.n_embd, self._cfg.n_embd * mlp_ratio),
             nn.ReLU(),
-            nn.Linear(self._cfg.n_embd * mlp_ratio, self._cfg.action_dim),
-            nn.Softmax(dim=-1)
+            nn.Linear(self._cfg.n_embd * mlp_ratio, self._cfg.action_dim * self._cfg.action_bins),
+            nn.Unflatten(1, (self._cfg.action_dim, self._cfg.action_bins)),
+            #nn.Softmax(dim=-1)
         )
+        self.softmax = nn.Softmax(dim=-1)
         self.loss = torch.nn.CrossEntropyLoss()
     else:
         self.mlp_continuous = nn.Sequential(
@@ -235,6 +237,9 @@ class GRP(nn.Module):
     else:
         loss = None
 
+    if self._cfg.discrete:
+        out = torch.argmax(self.softmax(out), dim=-1)
+
     return (out, loss)
 
 #import hydra, json
@@ -272,22 +277,41 @@ def my_main(cfg: DictConfig):
     # create a mapping from characters to integers
     stoi = { ch:i for i,ch in enumerate(chars) }
     itos = { i:ch for i,ch in enumerate(chars) }
-    encode_txt = lambda s: [stoi[c] for c in s] # text encoder to tokens: 
-    decode_txy = lambda l: ''.join([itos[i] for i in l]) # token decoder to text: 
-    print("vocab_size:", cfg.vocab_size)
-    print("example text encode:", encode_txt(dataset_tmp["goal"][0]))
+
+    #encode_txt = lambda s: [stoi[c] for c in s] # text encoder to tokens:
+    #decode_txy = lambda l: ''.join([itos[i] for i in l]) # token decoder to text:
+    #print("vocab_size:", cfg.vocab_size)
+    #print("example text encode:", encode_txt(dataset_tmp["goal"][0]))
+
+    tokenizer = T5Tokenizer.from_pretrained("google-t5/t5-small")
+
+    def encode_txt():
+        if cfg.use_T5:
+            encoded_txt = tokenizer(dataset_tmp["goal"], padding="longest", truncation=True, max_length=cfg.block_size, return_tensors='pt')
+            return encoded_txt.input_ids
+        else:
+            return [stoi[c] for c in dataset_tmp["goal"]]  # text encoder to tokens:
+
+    def decode_txt(encoded_list):
+        if cfg.use_T5:
+            decoded_txt = tokenizer.batch_decode(encoded_list, skip_special_tokens=True)
+            return decoded_txt
+        else:
+            decoded_txt = [''.join([itos[i] for i in encoded]) for encoded in encoded_list]  # Decode characters properly
+            return decoded_txt
 
     # TODO: 
     ## Provide the logic for the GRP policy for discretized or continuous actions
 
     def encode_action(actions):
-        cfg.a_std, cfg.a_mean = (actions.std(axis=0) + 0.001) * 2, actions.mean(axis=0)
-        actions = ((actions - cfg.a_mean) / cfg.a_std).astype(np.float32)
+        cfg.action_std = np.array((actions.std(axis=0) + 0.001) * 2, dtype=np.float32).tolist()
+        cfg.action_mean = np.array(actions.mean(axis=0), dtype=np.float32).tolist()
+        actions = ((actions - cfg.action_mean) / cfg.action_std).astype(np.float32)
         if cfg.discrete:
             num_bins = cfg.action_bins
             bin_edges = np.linspace(-1, 1, num_bins + 1)
             discrete_actions = np.digitize(actions, bins=bin_edges, right=False) - 1
-            discrete_actions = np.clip(discrete_actions, 0, num_bins - 1)
+            #discrete_actions = np.clip(discrete_actions, 0, num_bins - 1)
             return discrete_actions
         return actions
 
@@ -296,8 +320,8 @@ def my_main(cfg: DictConfig):
             num_bins = cfg.action_bins
             bin_edges = np.linspace(-1, 1, num_bins + 1)
             bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-            encoded_actions = bin_centers[encoded_actions]
-        decoded_actions = (encoded_actions * cfg.a_std) + cfg.a_mean
+            encoded_actions = bin_centers[encoded_actions.astype(int)]
+        decoded_actions = (encoded_actions * cfg.action_std) + cfg.action_mean
         return decoded_actions
 
     ## Get the actions and encode them to map to [-1, 1]
@@ -378,10 +402,10 @@ def my_main(cfg: DictConfig):
                                             ,torch.tensor(np.array([encode_state(resize_state(image))])).to(device) ## Not the correct goal image... Should mask this.
                                             )
                         # action = env.action_space.sample() # replace this with your policy inference
-                        if cfg.load_action_bounds:
-                            action = decode_action(action.cpu().detach().numpy()[0]) ## Add in the gripper close action
-                        else:
-                            action = np.concatenate((decode_action(action.cpu().detach().numpy()[0]), [0]), axis = -1) ## Add in the gripper close action
+                        #if cfg.load_action_bounds:
+                        action = decode_action(action.cpu().detach().numpy()[0]) ## Add in the gripper close action
+                        #else:
+                        #    action = np.concatenate((decode_action(action.cpu().detach().numpy()[0]), [0]), axis = -1) ## Add in the gripper close action
                         obs, reward, done, truncated, info = env.step(action)
                         reward = -np.linalg.norm(info["eof_to_obj1_diff"])
                         frames.append(image)
