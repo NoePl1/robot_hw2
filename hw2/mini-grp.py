@@ -4,6 +4,7 @@ from torch.nn import functional as F
 from torch.optim import Adam
 from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader
+import math
 
 from transformers import T5Tokenizer
 import tensorflow_datasets as tfds
@@ -72,11 +73,34 @@ class Head(nn.Module):
         ## Provide the block masking
         k = self.key(x)   # (B,T,C)
         q = self.query(x) # (B,T,C)
+
+        # Compute raw attention scores (dot product of queries and keys)
+        wei = q @ k.transpose(-2, -1) / math.sqrt(C)
+
+        # Apply attention mask (before clamping) to set ignored positions to -inf
+        if mask is not None:
+            #print("Attention mask NaNs:", torch.isnan(mask).sum().item())
+            assert not torch.isnan(mask).any(), "❌ Attention mask contains NaN!"
+            wei = wei.masked_fill(mask == 0, float('-inf'))  # ✅ Apply mask before clamping
+
+        # Prevent overflow in Softmax by clamping large values
+        wei = torch.clamp(wei, min=-50.0, max=50.0)  # ✅ Prevents extreme values
+
+        # Apply Softmax to get attention probabilities
+        wei = F.softmax(wei, dim=-1)
+
+        # Debugging: Check if Softmax output has NaNs
+        #print("Max attention scores after clamping:", wei.max().item())
+        #print("Min attention scores after clamping:", wei.min().item())
+
+        if torch.isnan(wei).any():
+            print("❌ NaNs detected in attention probabilities!")
+            exit()
         # compute attention scores ("affinities")
-        wei = q @ k.transpose(-2,-1) * C**-0.5 # (B, T, C) @ (B, C, T) -> (B, T, T)
+        #wei = q @ k.transpose(-2,-1) * C**-0.5 # (B, T, C) @ (B, C, T) -> (B, T, T)
         ### Block masked attention
-        wei = wei.masked_fill(mask == 0, float('-inf')) # (B, T, T)
-        wei = F.softmax(wei, dim=-1) # (B, T, T)
+        #wei = wei.masked_fill(mask == 0, float('-inf')) # (B, T, T)
+        #wei = F.softmax(wei, dim=-1) # (B, T, T)
         wei = self.dropout(wei)
         # perform the weighted aggregation of the values
         v = self.value(x) # (B,T,C)
@@ -121,10 +145,14 @@ class Block(nn.Module):
         head_size = n_embd // n_head
         self.sa = MultiHeadAttention(n_head, head_size, n_embd=n_embd, dropout=dropout)
         self.ffwd = FeedFoward(n_embd, dropout)
-        self.ln1 = nn.LayerNorm(n_embd)
-        self.ln2 = nn.LayerNorm(n_embd)
+        #self.ln1 = nn.LayerNorm(n_embd)
+        #self.ln2 = nn.LayerNorm(n_embd)
+
+        self.ln1 = nn.LayerNorm(n_embd, eps=1e-6)
+        self.ln2 = nn.LayerNorm(n_embd, eps=1e-6)
 
     def forward(self, x, mask=None):
+
         x = x + self.sa(self.ln1(x), mask)
         x = x + self.ffwd(self.ln2(x))
         return x
@@ -138,7 +166,7 @@ class GRP(nn.Module):
     ## Provide the logic for the GRP network
     self.patch_length = (self._cfg.image_shape[0] * self._cfg.image_shape[1] * self._cfg.image_shape[2]) // (self._cfg.n_patches**2)
     self.patch_embd = nn.Linear(self.patch_length, self._cfg.n_embd)
-    self.txt_embd = nn.Embedding(self._cfg.vocab_size, self._cfg.n_embd)
+    self.txt_embd = nn.Embedding(self._cfg.vocab_size, self._cfg.n_embd) #BIZARRE?
     self.cls_token = nn.Parameter(torch.randn(1, 1, self._cfg.n_embd))  # (1, 1, D)
     # 4) Transformer encoder blocks
     self.transformers = nn.ModuleList([Block(n_embd=self._cfg.n_embd, n_head=self._cfg.n_head, dropout=self._cfg.dropout) for _ in range(self._cfg.n_blocks)])
@@ -205,17 +233,26 @@ class GRP(nn.Module):
     # Map the vector corresponding to each patch to the hidden size dimension
     patches = get_patches_fast(images).to(self._cfg.device)
     patches = self.patch_embd(patches)
+    #print("Patch embeddings NaNs:", torch.isnan(patches).sum().item())
+
     goals_txt = self.txt_embd(goals_txt)
+    #print("Text embeddings NaNs:", torch.isnan(goals_txt).sum().item())
+
     goal_patches = get_patches_fast(goal_imgs).to(self._cfg.device)
     goal_patches = self.patch_embd(goal_patches)
+    #print("Goal patch embeddings NaNs:", torch.isnan(goal_patches).sum().item())
 
     # Adding classification and goal_img tokens to the tokens
     cls_tokens = self.cls_token.expand(B, -1, -1).to(self._cfg.device)
-
     input_embd = torch.cat((goals_txt, goal_patches, patches, cls_tokens), dim=1).to(self._cfg.device)
+    #print("Input embeddings NaNs:", torch.isnan(input_embd).sum().item())
 
     # Adding positional embedding
-    input_embd = input_embd + calc_positional_embeddings(input_embd.shape[1], self._cfg.n_embd).to(self._cfg.device)
+    pos_embd = calc_positional_embeddings(input_embd.shape[1], self._cfg.n_embd).to(self._cfg.device)
+    #print("Positional embeddings NaNs:", torch.isnan(pos_embd).sum().item())
+
+    input_embd = input_embd + pos_embd
+    #print("After positional embeddings NaNs:", torch.isnan(input_embd).sum().item())
 
     # Compute blocked masks
     if self.masks is None :
@@ -232,14 +269,14 @@ class GRP(nn.Module):
     for transfo in self.transformers:
         x = transfo(x, self.masks)
 
-    # Getting the classification token only
     out_cls = x[:, -1, :]
+    #print("MLP Input NaNs:", torch.isnan(out_cls).sum().item())
 
     # Compute output and loss
     out = self.mlp(out_cls)
+    #print("Final output NaNs:", torch.isnan(out).sum().item())
+
     if targets is not None:
-        print('---------OUT---------')
-        print(out)
         loss = self.loss(out, targets)
     else:
         loss = None
@@ -440,7 +477,12 @@ def my_main(cfg: DictConfig):
         xb, xg, xgi, yb = get_batch_grp('train', dataset_tmp, cfg.batch_size)
 
         # evaluate the loss
+        torch.autograd.set_detect_anomaly(False)
         logits, loss = model(xb, xg, xgi, yb)
+        #print("Logits max:", logits.max().item(), "Logits min:", logits.min().item())
+        #print("Logits NaNs:", torch.isnan(logits).sum().item())
+        #print(f"Iteration {iter}: Loss = {loss.item()}")
+        assert not torch.isnan(loss), "NaN detected in loss before backward!"
         loss.backward()
 
         if (iter + 1) % cfg.gradient_accumulation_steps == 0:
