@@ -277,7 +277,26 @@ class GRP(nn.Module):
     #print("Final output NaNs:", torch.isnan(out).sum().item())
 
     if targets is not None:
-        loss = self.loss(out, targets)
+        if self._cfg.discrete:
+            if targets.min() < 0:
+                #print("⚠️ Fixing negative targets by shifting all values...")
+                targets = targets - targets.min()  # Shift up so min value becomes 0
+            # 🚀 Fix 3: Clamp Targets to Valid Range
+            num_classes = out.shape[1]
+            targets = torch.clamp(targets, min=0, max=num_classes - 1)
+
+            #print("🔍 Debugging Targets:")
+            #print(f"Targets shape: {targets.shape}")
+            #print(f"Targets dtype: {targets.dtype}")
+            #print(f"Targets unique values: {targets.unique()}")
+            #print(f"Targets min value: {targets.min()}, max value: {targets.max()}")
+            #print(f"out shape: {out.shape}, targets shape: {targets.shape}")
+            #print(f"out dtype: {out.dtype}, targets dtype: {targets.dtype}")
+            #assert targets.min() >= 0, "❌ ERROR: targets contain negative values!"
+            #assert targets.max() < out.shape[1], f"❌ ERROR: target values exceed num_classes ({out.shape[1]})!"
+            loss = self.loss(out, targets.long())
+        else:
+            loss = self.loss(out, targets)
     else:
         loss = None
 
@@ -293,6 +312,7 @@ from omegaconf import DictConfig, OmegaConf
 #@hydra.main(config_path="./conf", config_name="bridge-64-light")
 def my_main(cfg: DictConfig):
     torch.manual_seed(cfg.r_seed)
+    log_dir = "hw2/output"
     #log_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
     print ("cfg:", OmegaConf.to_yaml(cfg))
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -468,9 +488,9 @@ def my_main(cfg: DictConfig):
                     wandb.log({"avg reward": np.mean(rewards)})
                 import moviepy.editor as mpy
                 clip = mpy.ImageSequenceClip(list(frames), fps=20)
-                #clip.write_videofile(log_dir+"/sim-env-"+str(iter)+".mp4", fps=20)
+                clip.write_videofile(log_dir+"/sim-env-"+str(iter)+".mp4", fps=20)
                 if not cfg.testing:
-                    #wandb.log({"example": wandb.Video(log_dir+"/sim-env-"+str(iter)+".mp4")})
+                    wandb.log({"example": wandb.Video(log_dir+"/sim-env-"+str(iter)+".mp4")})
                     pass
 
         # sample a batch of data
