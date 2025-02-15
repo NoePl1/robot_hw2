@@ -94,7 +94,6 @@ class Head(nn.Module):
         #print("Min attention scores after clamping:", wei.min().item())
 
         if torch.isnan(wei).any():
-            print("❌ NaNs detected in attention probabilities!")
             exit()
         # compute attention scores ("affinities")
         #wei = q @ k.transpose(-2,-1) * C**-0.5 # (B, T, C) @ (B, C, T) -> (B, T, T)
@@ -233,26 +232,19 @@ class GRP(nn.Module):
     # Map the vector corresponding to each patch to the hidden size dimension
     patches = get_patches_fast(images).to(self._cfg.device)
     patches = self.patch_embd(patches)
-    #print("Patch embeddings NaNs:", torch.isnan(patches).sum().item())
 
     goals_txt = self.txt_embd(goals_txt)
-    #print("Text embeddings NaNs:", torch.isnan(goals_txt).sum().item())
 
     goal_patches = get_patches_fast(goal_imgs).to(self._cfg.device)
     goal_patches = self.patch_embd(goal_patches)
-    #print("Goal patch embeddings NaNs:", torch.isnan(goal_patches).sum().item())
 
     # Adding classification and goal_img tokens to the tokens
     cls_tokens = self.cls_token.expand(B, -1, -1).to(self._cfg.device)
     input_embd = torch.cat((goals_txt, goal_patches, patches, cls_tokens), dim=1).to(self._cfg.device)
-    #print("Input embeddings NaNs:", torch.isnan(input_embd).sum().item())
 
     # Adding positional embedding
     pos_embd = calc_positional_embeddings(input_embd.shape[1], self._cfg.n_embd).to(self._cfg.device)
-    #print("Positional embeddings NaNs:", torch.isnan(pos_embd).sum().item())
-
     input_embd = input_embd + pos_embd
-    #print("After positional embeddings NaNs:", torch.isnan(input_embd).sum().item())
 
     # Compute blocked masks
     if self.masks is None :
@@ -270,30 +262,16 @@ class GRP(nn.Module):
         x = transfo(x, self.masks)
 
     out_cls = x[:, -1, :]
-    #print("MLP Input NaNs:", torch.isnan(out_cls).sum().item())
 
     # Compute output and loss
     out = self.mlp(out_cls)
-    #print("Final output NaNs:", torch.isnan(out).sum().item())
 
     if targets is not None:
         if self._cfg.discrete:
             if targets.min() < 0:
-                #print("⚠️ Fixing negative targets by shifting all values...")
                 targets = targets - targets.min()  # Shift up so min value becomes 0
-            # 🚀 Fix 3: Clamp Targets to Valid Range
             num_classes = out.shape[1]
             targets = torch.clamp(targets, min=0, max=num_classes - 1)
-
-            #print("🔍 Debugging Targets:")
-            #print(f"Targets shape: {targets.shape}")
-            #print(f"Targets dtype: {targets.dtype}")
-            #print(f"Targets unique values: {targets.unique()}")
-            #print(f"Targets min value: {targets.min()}, max value: {targets.max()}")
-            #print(f"out shape: {out.shape}, targets shape: {targets.shape}")
-            #print(f"out dtype: {out.dtype}, targets dtype: {targets.dtype}")
-            #assert targets.min() >= 0, "❌ ERROR: targets contain negative values!"
-            #assert targets.max() < out.shape[1], f"❌ ERROR: target values exceed num_classes ({out.shape[1]})!"
             loss = self.loss(out, targets.long())
         else:
             loss = self.loss(out, targets)
@@ -348,9 +326,9 @@ def my_main(cfg: DictConfig):
     #print("example text encode:", encode_txt(dataset_tmp["goal"][0]))
 
     tokenizer = T5Tokenizer.from_pretrained("google-t5/t5-small")
-
     def encode_txt(data):
         if cfg.use_T5:
+            cfg.vocab_size = tokenizer.vocab_size
             encoded_txt = tokenizer(data, padding="longest", return_tensors='pt')
             return encoded_txt.input_ids
         else:
