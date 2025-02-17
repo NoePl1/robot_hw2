@@ -250,10 +250,8 @@ class GRP(nn.Module):
 
     if targets is not None:
         if self._cfg.discrete:
-            if targets.min() < 0:
-                targets = targets - targets.min()  # Shift up so min value becomes 0
-            num_classes = out.shape[1]
-            targets = torch.clamp(targets, min=0, max=num_classes - 1)
+            print("target min: ", targets.min())
+            print("target max: ", targets.max())
             loss = self.loss(out, targets.long())
         else:
             loss = self.loss(out, targets)
@@ -339,9 +337,9 @@ def my_main(cfg: DictConfig):
         actions = ((actions - cfg.action_mean) / cfg.action_std).astype(np.float32)
         if cfg.discrete:
             num_bins = cfg.action_bins
-            bin_edges = np.linspace(-1, 1, num_bins + 1)
+            bin_edges = np.linspace(-1, 1, num_bins+1)
             discrete_actions = np.digitize(actions, bins=bin_edges, right=False) - 1
-            #discrete_actions = np.clip(discrete_actions, 0, num_bins - 1)
+            discrete_actions = np.clip(discrete_actions, 0, num_bins - 1)
             return discrete_actions.astype(int)
         return actions
 
