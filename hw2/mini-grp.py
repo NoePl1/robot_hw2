@@ -5,6 +5,7 @@ from torch.optim import Adam
 from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader
 import math
+import os
 
 from transformers import T5Tokenizer
 import tensorflow_datasets as tfds
@@ -74,32 +75,12 @@ class Head(nn.Module):
         k = self.key(x)   # (B,T,C)
         q = self.query(x) # (B,T,C)
 
-        # Compute raw attention scores (dot product of queries and keys)
-        wei = q @ k.transpose(-2, -1) / math.sqrt(C)
-
-        # Apply attention mask (before clamping) to set ignored positions to -inf
-        if mask is not None:
-            #print("Attention mask NaNs:", torch.isnan(mask).sum().item())
-            assert not torch.isnan(mask).any(), "❌ Attention mask contains NaN!"
-            wei = wei.masked_fill(mask == 0, float('-inf'))  # ✅ Apply mask before clamping
-
-        # Prevent overflow in Softmax by clamping large values
-        wei = torch.clamp(wei, min=-50.0, max=50.0)  # ✅ Prevents extreme values
-
-        # Apply Softmax to get attention probabilities
-        wei = F.softmax(wei, dim=-1)
-
-        # Debugging: Check if Softmax output has NaNs
-        #print("Max attention scores after clamping:", wei.max().item())
-        #print("Min attention scores after clamping:", wei.min().item())
-
-        if torch.isnan(wei).any():
-            exit()
         # compute attention scores ("affinities")
-        #wei = q @ k.transpose(-2,-1) * C**-0.5 # (B, T, C) @ (B, C, T) -> (B, T, T)
+        wei = q @ k.transpose(-2, -1) / math.sqrt(C)  # (B, T, C) @ (B, C, T) -> (B, T, T)
         ### Block masked attention
-        #wei = wei.masked_fill(mask == 0, float('-inf')) # (B, T, T)
-        #wei = F.softmax(wei, dim=-1) # (B, T, T)
+        if mask is not None:
+            wei = wei.masked_fill(mask == 0, -10000) # (B, T, T)
+        wei = F.softmax(wei, dim=-1) # (B, T, T)
         wei = self.dropout(wei)
         # perform the weighted aggregation of the values
         v = self.value(x) # (B,T,C)
@@ -173,9 +154,10 @@ class GRP(nn.Module):
     # 5) Classification MLPk
     if self._cfg.discrete:
         self.mlp = nn.Sequential(
-            nn.Linear(self._cfg.n_embd, self._cfg.n_embd * mlp_ratio),
+            #nn.Linear(self._cfg.n_embd, self._cfg.n_embd * mlp_ratio),
+            nn.Linear(self._cfg.n_embd, self._cfg.action_dim * self._cfg.action_bins),
             nn.ReLU(),
-            nn.Linear(self._cfg.n_embd * mlp_ratio, self._cfg.action_dim * self._cfg.action_bins),
+            #nn.Linear(self._cfg.n_embd * mlp_ratio, self._cfg.action_dim * self._cfg.action_bins),
             nn.Unflatten(1, (self._cfg.action_bins, self._cfg.action_dim)),
             nn.Softmax(dim=1)
         )
@@ -291,6 +273,7 @@ from omegaconf import DictConfig, OmegaConf
 def my_main(cfg: DictConfig):
     torch.manual_seed(cfg.r_seed)
     log_dir = "hw2/output"
+    os.makedirs(log_dir, exist_ok=True)
     #log_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
     print ("cfg:", OmegaConf.to_yaml(cfg))
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
