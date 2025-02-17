@@ -1,9 +1,8 @@
 ## Code to fetch data and create an easy dataset.
 
-import hydra, json
 from omegaconf import DictConfig, OmegaConf
 
-@hydra.main(config_path="./conf", config_name="dataset")
+#@hydra.main(config_path="./conf", config_name="dataset")
 def my_main(cfg: DictConfig):
     import tensorflow_datasets as tfds
     import numpy as np
@@ -22,7 +21,7 @@ def my_main(cfg: DictConfig):
     for episode in datasetRemote:
         episode_ = {'steps': [] }
         episode = list(episode['steps'])
-        goal_img = cv2.resize(np.array(episode[-1]['observation']['image'], dtype=np.float32), (cfg.image_shape[0], cfg.image_shape[1]))  
+        goal_img = cv2.resize(np.array(episode[-1]['observation']['image'], dtype=np.float32), (cfg.image_shape[0], cfg.image_shape[1]))
         for i in range(len(episode)): ## Resize images to reduce computation
             # action = torch.as_tensor(action) # grab first dimention
             obs = cv2.resize(np.array(episode[i]['observation']['image'], dtype=np.float32), (cfg.image_shape[0], cfg.image_shape[1]))
@@ -58,5 +57,6 @@ def my_main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
-    results = my_main()
+    loaded = OmegaConf.load("/content/robot_hw2/hw2/conf/dataset.yaml")
+    results = my_main(loaded)
     print("results:", results)

@@ -19,10 +19,11 @@ def get_batch_grp(split, dataset, batch_size):
     data = dataset['train'] if split == 'train' else dataset['test']
     ix = np.random.randint(int(len(data["img"])), size=(batch_size,))
     x = torch.tensor(data["img"][ix], dtype=torch.float)
+    x_prev = torch.tensor(data["prev_img"][ix], dtype=torch.float)
     x_goal = torch.tensor(data["goal"][ix], dtype=torch.long)
     x_goal_img = torch.tensor(data["goal_img"][ix], dtype=torch.float)
     y = torch.tensor(data["action"][ix], dtype=torch.float)
-    return x, x_goal, x_goal_img, y
+    return x,x_prev, x_goal, x_goal_img, y
 
 
 @torch.no_grad()
@@ -32,9 +33,9 @@ def estimate_loss(model, device):
     for split in ['train', 'val']:
         losses = torch.zeros(model._cfg.eval_iters).to(device)
         for k in range(model._cfg.eval_iters):
-            X, x_goal, x_goal_img, Y = get_batch_grp(split, model._dataset, model._cfg.batch_size)
+            X, x_prev, x_goal, x_goal_img, Y = get_batch_grp(split, model._dataset, model._cfg.batch_size)
             #X, x_goal, x_goal_img, Y = X.to(device), x_goal.to(device), x_goal_img.to(device), Y.to(device)
-            logits, loss = model(X, x_goal, x_goal_img, Y)
+            logits, loss = model(X,x_prev, x_goal, x_goal_img, Y)
             losses[k] = loss.item()
         out[split] = losses.mean()
     model.train()
@@ -146,7 +147,7 @@ class GRP(nn.Module):
     ## Provide the logic for the GRP network
     self.patch_length = (self._cfg.image_shape[0] * self._cfg.image_shape[1] * self._cfg.image_shape[2]) // (self._cfg.n_patches**2)
     self.patch_embd = nn.Linear(self.patch_length, self._cfg.n_embd)
-    self.txt_embd = nn.Embedding(self._cfg.vocab_size, self._cfg.n_embd) #BIZARRE?
+    self.txt_embd = nn.Embedding(self._cfg.vocab_size, self._cfg.n_embd)
     self.cls_token = nn.Parameter(torch.randn(1, 1, self._cfg.n_embd))  # (1, 1, D)
     # 4) Transformer encoder blocks
     self.transformers = nn.ModuleList([Block(n_embd=self._cfg.n_embd, n_head=self._cfg.n_head, dropout=self._cfg.dropout) for _ in range(self._cfg.n_blocks)])
@@ -179,14 +180,14 @@ class GRP(nn.Module):
       elif isinstance(module, nn.Embedding):
           torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-  def compute_block_mask(self, B, T1, T2, T3, targets):
-      mask1 = torch.ones(T1 + T2 + T3 + 1, T1 + T2 + T3 + 1)
+  def compute_block_mask(self, B, T1, T2, T3,T4 ,targets):
+      mask1 = torch.ones(T1 + T2 + T3 + T4 +1, T1 + T2 + T3 + T4 + 1)
       mask1[:, -1] = 0
       if targets is not None:
           mask1[0:T1, :] = 0
           mask1[:, 0:T1] = 0
 
-      mask2 = torch.ones(T1 + T2 + T3 + 1, T1 + T2 + T3 + 1)
+      mask2 = torch.ones(T1 + T2 + T3 + T4 + 1, T1 + T2 + T3 + T4 + 1)
       mask2[:, -1] = 0
       if targets is not None:
           mask2[T1:T1 + T2, :] = 0
@@ -201,19 +202,20 @@ class GRP(nn.Module):
 
       return torch.cat((mask1, mask2), dim=0)
 
-  def forward(self, images, goals_txt, goal_imgs, targets=None):
-    images, goals_txt, goal_imgs = images.to(self._cfg.device), goals_txt.to(self._cfg.device), goal_imgs.to(self._cfg.device)
+  def forward(self, images, prev_img, goals_txt, goal_imgs, targets=None):
+    images, prev_img, goals_txt, goal_imgs = images.to(self._cfg.device), prev_img.to(self.cfg_device), goals_txt.to(self._cfg.device), goal_imgs.to(self._cfg.device)
     if targets is not None:
         targets = targets.to(self._cfg.device)
     # Dividing images into patches
     n, h, w, c = images.shape
-    # TODO:
-    ## Provide the logic to produce the output and loss for the GRP
 
     B, T1 = goals_txt.shape
     # Map the vector corresponding to each patch to the hidden size dimension
     patches = get_patches_fast(images).to(self._cfg.device)
     patches = self.patch_embd(patches)
+
+    patches_prev_img = get_patches_fast(prev_img).to(self._cfg.device)
+    patches_prev_img = self.patch_embd(patches_prev_img)
 
     goals_txt = self.txt_embd(goals_txt)
 
@@ -222,7 +224,7 @@ class GRP(nn.Module):
 
     # Adding classification and goal_img tokens to the tokens
     cls_tokens = self.cls_token.expand(B, -1, -1).to(self._cfg.device)
-    input_embd = torch.cat((goals_txt, goal_patches, patches, cls_tokens), dim=1).to(self._cfg.device)
+    input_embd = torch.cat((goals_txt, goal_patches, patches, patches_prev_img, cls_tokens), dim=1).to(self._cfg.device)
 
     # Adding positional embedding
     pos_embd = calc_positional_embeddings(input_embd.shape[1], self._cfg.n_embd).to(self._cfg.device)
@@ -232,11 +234,13 @@ class GRP(nn.Module):
     if self.masks is None :
         B, T2, C = goal_patches.shape
         B, T3, C = patches.shape
-        self.masks = self.compute_block_mask(B, T1, T2, T3, targets).to(self._cfg.device)
+        B, T4, C = patches_prev_img.shape
+        self.masks = self.compute_block_mask(B, T1, T2, T3, T4, targets).to(self._cfg.device)
     if self.masks.shape[0] != B:
         B, T2, C = goal_patches.shape
         B, T3, C = patches.shape
-        self.masks = self.compute_block_mask(B, T1, T2, T3, targets).to(self._cfg.device)
+        B, T4, C = patches_prev_img.shape
+        self.masks = self.compute_block_mask(B, T1, T2, T3, T4, targets).to(self._cfg.device)
 
     # Transformer Blocks
     x = input_embd
@@ -324,9 +328,6 @@ def my_main(cfg: DictConfig):
             decoded_txt = [''.join([itos[i] for i in encoded]) for encoded in encoded_list]
             return decoded_txt
 
-    # TODO: 
-    ## Provide the logic for the GRP policy for discretized or continuous actions
-
     def encode_action(actions):
         cfg.action_std = np.array((actions.std(axis=0) + 0.001) * 2, dtype=np.float32).tolist()
         cfg.action_mean = np.array(actions.mean(axis=0), dtype=np.float32).tolist()
@@ -352,18 +353,24 @@ def my_main(cfg: DictConfig):
     encode_state = lambda af:   ((af/(255.0)*2.0)-1.0).astype(np.float32) # encoder: take a float, output an integer
     resize_state = lambda sf:   cv2.resize(np.array(sf, dtype=np.float32), (cfg.image_shape[0], cfg.image_shape[1]))  # resize state
 
+    def add_previous_image(images):
+        prev_images = torch.cat((images[0].unsqueeze(0), images[:-1]), dim=0)
+        return prev_images
+
     n = int(0.9*len(dataset_tmp["img"])) # first 90% will be train, rest val
     dataset_tmp = { 
         "train":
             {
             "img": torch.tensor(encode_state(dataset_tmp["img"][:n])).to(device),
-            "action": torch.tensor(encode_action(dataset_tmp["action"][:n]), dtype=torch.float).to(device),            
+            "prev_img": add_previous_image(torch.tensor(encode_state(dataset_tmp["img"][:n]))).to(device),
+            "action": torch.tensor(encode_action(dataset_tmp["action"][:n]), dtype=torch.float).to(device),
             "goal_img": torch.tensor(encode_state(dataset_tmp["goal_img"][:n])).to(device),
             "goal": torch.tensor(encode_txt(dataset_tmp["goal"][:n])).to(device)
             },
         "test": 
         {
             "img": torch.tensor(encode_state(dataset_tmp["img"][n:])).to(device),
+            "prev_img": add_previous_image(torch.tensor(encode_state(dataset_tmp["img"][n:]))).to(device),
             "action": torch.tensor(encode_action(dataset_tmp["action"][n:]), dtype=torch.float).to(device),            
             "goal_img": torch.tensor(encode_state(dataset_tmp["goal_img"][n:])).to(device),
             "goal": torch.tensor(encode_txt(dataset_tmp["goal"][n:])).to(device)
@@ -421,7 +428,10 @@ def my_main(cfg: DictConfig):
                         # action[6:7]: gripper (the meaning of open / close depends on robot URDF)
                         image = get_image_from_maniskill2_obs_dict(env_unwrapped, obs)
                         image = image[:,:,:3] ## Remove last dimension of image color
+                        if len(frames) == 0:
+                            prev_image = image
                         action, loss = model.forward(torch.tensor(np.array([encode_state(resize_state(image))])).to(device)
+                                            ,torch.tensor(np.array([encode_state(resize_state(prev_image))])).to(device)
                                             ,torch.tensor(np.array(encode_txt([instruction]))).to(device) ## There can be issues here if th text is shorter than any example in the dataset
                                             ,torch.tensor(np.array([encode_state(resize_state(torch.zeros_like(image)))])).to(device) ## Not the correct goal image... Should mask this.
                                             )
@@ -433,6 +443,7 @@ def my_main(cfg: DictConfig):
                         obs, reward, done, truncated, info = env.step(action)
                         reward = -np.linalg.norm(info["eof_to_obj1_diff"])
                         frames.append(image)
+                        prev_image = image
                         rewards.append(reward)
                         t=t+1
                 
@@ -449,10 +460,10 @@ def my_main(cfg: DictConfig):
                     pass
 
         # sample a batch of data
-        xb, xg, xgi, yb = get_batch_grp('train', dataset_tmp, cfg.batch_size)
+        xb, xprev, xg, xgi, yb = get_batch_grp('train', dataset_tmp, cfg.batch_size)
 
         # evaluate the loss
-        logits, loss = model(xb, xg, xgi, yb)
+        logits, loss = model(xb, xprev, xg, xgi, yb)
         loss.backward()
 
         if (iter + 1) % cfg.gradient_accumulation_steps == 0:
