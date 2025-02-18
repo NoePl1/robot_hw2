@@ -32,7 +32,7 @@ eval_iters: 200
 n_embd: 256
 device: "cuda"
 testing: false
-simEval: false
+simEval: true
 eval_vid_iters: 1000
 gradient_accumulation_steps: 2
 
@@ -44,7 +44,7 @@ n_blocks: 4
 dropout: 0.2
 action_bins: 10
 action_dim: 7
-discrete: false
+discrete: true
 use_T5: false
 load_action_bounds: true
 env:
@@ -56,8 +56,8 @@ env:
 image_shape: [64, 64, 3]
 dataset: 
   from_name: "gs://gresearch/robotics/bridge/0.1.0/"
-  to_name: noe-pl1/robot-learning-hw2
-  num_episodes: 250
+  to_name: gberseth/mini-bridge-mini64px
+  num_episodes: 10
 trim: 1000000
 
 

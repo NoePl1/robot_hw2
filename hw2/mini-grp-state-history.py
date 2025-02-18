@@ -35,7 +35,7 @@ def estimate_loss(model, device):
         for k in range(model._cfg.eval_iters):
             X, x_prev, x_goal, x_goal_img, Y = get_batch_grp(split, model._dataset, model._cfg.batch_size)
             #X, x_goal, x_goal_img, Y = X.to(device), x_goal.to(device), x_goal_img.to(device), Y.to(device)
-            logits, loss = model(X,x_prev, x_goal, x_goal_img, Y)
+            logits, loss = model(X, x_prev, x_goal, x_goal_img, Y)
             losses[k] = loss.item()
         out[split] = losses.mean()
     model.train()
@@ -71,8 +71,7 @@ class Head(nn.Module):
 
     def forward(self, x, mask=None):
         B,T,C = x.shape
-        # TODO: 
-        ## Provide the block masking
+
         k = self.key(x)   # (B,T,C)
         q = self.query(x) # (B,T,C)
 
@@ -180,8 +179,8 @@ class GRP(nn.Module):
       elif isinstance(module, nn.Embedding):
           torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-  def compute_block_mask(self, B, T1, T2, T3,T4 ,targets):
-      mask1 = torch.ones(T1 + T2 + T3 + T4 +1, T1 + T2 + T3 + T4 + 1)
+  def compute_block_mask(self, B, T1, T2, T3, T4, targets):
+      mask1 = torch.ones(T1 + T2 + T3 + T4 + 1, T1 + T2 + T3 + T4 + 1)
       mask1[:, -1] = 0
       if targets is not None:
           mask1[0:T1, :] = 0
@@ -203,7 +202,7 @@ class GRP(nn.Module):
       return torch.cat((mask1, mask2), dim=0)
 
   def forward(self, images, prev_img, goals_txt, goal_imgs, targets=None):
-    images, prev_img, goals_txt, goal_imgs = images.to(self._cfg.device), prev_img.to(self.cfg_device), goals_txt.to(self._cfg.device), goal_imgs.to(self._cfg.device)
+    images, prev_img, goals_txt, goal_imgs = images.to(self._cfg.device), prev_img.to(self._cfg.device), goals_txt.to(self._cfg.device), goal_imgs.to(self._cfg.device)
     if targets is not None:
         targets = targets.to(self._cfg.device)
     # Dividing images into patches
@@ -213,14 +212,19 @@ class GRP(nn.Module):
     # Map the vector corresponding to each patch to the hidden size dimension
     patches = get_patches_fast(images).to(self._cfg.device)
     patches = self.patch_embd(patches)
+    print('patches shape:', patches.shape)
 
     patches_prev_img = get_patches_fast(prev_img).to(self._cfg.device)
     patches_prev_img = self.patch_embd(patches_prev_img)
+    print('patches_prev_img shape:', patches_prev_img.shape)
 
     goals_txt = self.txt_embd(goals_txt)
+    print('goals_txt shape:', goals_txt.shape)
+
 
     goal_patches = get_patches_fast(goal_imgs).to(self._cfg.device)
     goal_patches = self.patch_embd(goal_patches)
+    print('goal_patches shape:', goal_patches.shape)
 
     # Adding classification and goal_img tokens to the tokens
     cls_tokens = self.cls_token.expand(B, -1, -1).to(self._cfg.device)

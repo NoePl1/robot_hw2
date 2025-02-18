@@ -24,15 +24,15 @@ batch_size: 128 # how many independent sequences will we process in parallel?
 block_size: 32 ## Will be overidden by code
 vocab_size: 32 ## Will be overidden by code
 n_patches: 8
-max_iters: 20000
-eval_interval: 100
+max_iters: 100
+eval_interval: 10
 learning_rate: 5e-5
-eval_iters: 200
+eval_iters: 20
 
-n_embd: 256
+n_embd: 128
 device: "cuda"
 testing: false
-simEval: false
+simEval: true
 eval_vid_iters: 1000
 gradient_accumulation_steps: 2
 
@@ -56,8 +56,8 @@ env:
 image_shape: [64, 64, 3]
 dataset: 
   from_name: "gs://gresearch/robotics/bridge/0.1.0/"
-  to_name: noe-pl1/robot-learning-hw2
-  num_episodes: 250
+  to_name: gberseth/mini-bridge-mini64px
+  num_episodes: 10
 trim: 1000000
 
 
