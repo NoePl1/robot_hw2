@@ -192,6 +192,11 @@
               mask2[T1:T1 + T2, :] = 0
               mask2[:, T1:T1 + T2] = 0
 
+          if B == 1 and targets is None:
+              mask2[T1:T1 + T2, :] = 0
+              mask2[:, T1:T1 + T2] = 0
+              return mask2
+
           if B % 2 == 0:
               mask1 = mask1.expand(B // 2, -1, -1)
               mask2 = mask2.expand(B // 2, -1, -1)
@@ -293,6 +298,8 @@
         # here are all the unique characters that occur in this text
         chars = sorted(list(set([item for row in dataset_tmp["goal"] for item in row]))) ## Flatten to a long string
         cfg.vocab_size = len(chars)
+        shortest_text_len = min([len(txt) for txt in dataset_tmp["goal"]])
+        largest_text_len = max([len(txt) for txt in dataset_tmp["goal"]])
         # create a mapping from characters to integers
         stoi = { ch:i for i,ch in enumerate(chars) }
         itos = { i:ch for i,ch in enumerate(chars) }
@@ -306,10 +313,9 @@
         def encode_txt(data):
             if cfg.use_T5:
                 cfg.vocab_size = tokenizer.vocab_size
-                encoded_txt = tokenizer(data, padding="longest", return_tensors='pt')
+                encoded_txt = tokenizer(data, padding=largest_text_len, return_tensors='pt')
                 return encoded_txt.input_ids
             else:
-                shortest_text_len = min([len(txt) for txt in data])
                 cfg.block_size = shortest_text_len
                 tokenized_texts = []
                 for text in data:
@@ -366,7 +372,7 @@
                 "img": torch.tensor(encode_state(dataset_tmp["img"][n:])).to(device),
                 "action": torch.tensor(encode_action(dataset_tmp["action"][n:]), dtype=torch.float).to(device),
                 "goal_img": torch.tensor(encode_state(dataset_tmp["goal_img"][n:])).to(device),
-                "goal": torch.tensor(encode_txt(dataset_tmp["goal"][:n])).to(device)
+                "goal": torch.tensor(encode_txt(dataset_tmp["goal"][n:])).to(device)
             }
         }
 

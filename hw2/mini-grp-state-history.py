@@ -192,6 +192,11 @@ class GRP(nn.Module):
           mask2[T1:T1 + T2, :] = 0
           mask2[:, T1:T1 + T2] = 0
 
+      if B == 1 and targets is None:
+          mask2[T1:T1 + T2, :] = 0
+          mask2[:, T1:T1 + T2] = 0
+          return mask2
+
       if B % 2 == 0:
           mask1 = mask1.expand(B // 2, -1, -1)
           mask2 = mask2.expand(B // 2, -1, -1)
@@ -212,19 +217,15 @@ class GRP(nn.Module):
     # Map the vector corresponding to each patch to the hidden size dimension
     patches = get_patches_fast(images).to(self._cfg.device)
     patches = self.patch_embd(patches)
-    print('patches shape:', patches.shape)
 
     patches_prev_img = get_patches_fast(prev_img).to(self._cfg.device)
     patches_prev_img = self.patch_embd(patches_prev_img)
-    print('patches_prev_img shape:', patches_prev_img.shape)
 
     goals_txt = self.txt_embd(goals_txt)
-    print('goals_txt shape:', goals_txt.shape)
 
 
     goal_patches = get_patches_fast(goal_imgs).to(self._cfg.device)
     goal_patches = self.patch_embd(goal_patches)
-    print('goal_patches shape:', goal_patches.shape)
 
     # Adding classification and goal_img tokens to the tokens
     cls_tokens = self.cls_token.expand(B, -1, -1).to(self._cfg.device)
@@ -301,6 +302,8 @@ def my_main(cfg: DictConfig):
     # here are all the unique characters that occur in this text
     chars = sorted(list(set([item for row in dataset_tmp["goal"] for item in row]))) ## Flatten to a long string
     cfg.vocab_size = len(chars)
+    shortest_text_len = min([len(txt) for txt in dataset_tmp["goal"]])
+    largest_text_len = max([len(txt) for txt in dataset_tmp["goal"]])
     # create a mapping from characters to integers
     stoi = { ch:i for i,ch in enumerate(chars) }
     itos = { i:ch for i,ch in enumerate(chars) }
@@ -314,10 +317,9 @@ def my_main(cfg: DictConfig):
     def encode_txt(data):
         if cfg.use_T5:
             cfg.vocab_size = tokenizer.vocab_size
-            encoded_txt = tokenizer(data, padding="longest", return_tensors='pt')
+            encoded_txt = tokenizer(data, padding=largest_text_len, return_tensors='pt')
             return encoded_txt.input_ids
         else:
-            shortest_text_len = min([len(txt) for txt in data])
             cfg.block_size = shortest_text_len
             tokenized_texts = []
             for text in data:
@@ -437,7 +439,7 @@ def my_main(cfg: DictConfig):
                         action, loss = model.forward(torch.tensor(np.array([encode_state(resize_state(image))])).to(device)
                                             ,torch.tensor(np.array([encode_state(resize_state(prev_image))])).to(device)
                                             ,torch.tensor(np.array(encode_txt([instruction]))).to(device) ## There can be issues here if th text is shorter than any example in the dataset
-                                            ,torch.tensor(np.array([encode_state(resize_state(torch.zeros_like(image)))])).to(device) ## Not the correct goal image... Should mask this.
+                                            ,torch.tensor(np.array([encode_state(resize_state(image))])).to(device) ## Not the correct goal image... Should mask this.
                                             )
                         # action = env.action_space.sample() # replace this with your policy inference
                         #if cfg.load_action_bounds:
