@@ -363,23 +363,32 @@ def my_main(cfg: DictConfig):
         prev_images = torch.cat((images[0].unsqueeze(0), images[:-1]), dim=0)
         return prev_images
 
+    total_samples = len(dataset_tmp["img"])
+    all_indices = np.random.permutation(total_samples)
+    n_train = int(0.9 * total_samples)
+    train_indices = all_indices[:n_train]
+    test_indices = all_indices[n_train:]
+    def select_by_indices(data, indices):
+        return np.array(data)[indices]
+
     n = int(0.9*len(dataset_tmp["img"])) # first 90% will be train, rest val
+
     dataset_tmp = { 
         "train":
             {
-            "img": torch.tensor(encode_state(dataset_tmp["img"][:n])).to(device),
-            "prev_img": add_previous_image(torch.tensor(encode_state(dataset_tmp["img"][:n]))).to(device),
-            "action": torch.tensor(encode_action(dataset_tmp["action"][:n]), dtype=torch.float).to(device),
-            "goal_img": torch.tensor(encode_state(dataset_tmp["goal_img"][:n])).to(device),
-            "goal": torch.tensor(encode_txt(dataset_tmp["goal"][:n])).to(device)
+            "img": torch.tensor(encode_state(select_by_indices(dataset_tmp["img"], train_indices))).to(device),
+            "prev_img": add_previous_image(torch.tensor(encode_state(select_by_indices(dataset_tmp["img"], train_indices)))).to(device),
+            "action": torch.tensor(encode_action(select_by_indices(dataset_tmp["action"], train_indices)), dtype=torch.float).to(device),
+            "goal_img": torch.tensor(encode_state(select_by_indices(dataset_tmp["goal_img"], train_indices))).to(device),
+            "goal": torch.tensor(encode_txt(select_by_indices(dataset_tmp["goal"], train_indices))).to(device)
             },
         "test": 
         {
-            "img": torch.tensor(encode_state(dataset_tmp["img"][n:])).to(device),
-            "prev_img": add_previous_image(torch.tensor(encode_state(dataset_tmp["img"][n:]))).to(device),
-            "action": torch.tensor(encode_action(dataset_tmp["action"][n:]), dtype=torch.float).to(device),            
-            "goal_img": torch.tensor(encode_state(dataset_tmp["goal_img"][n:])).to(device),
-            "goal": torch.tensor(encode_txt(dataset_tmp["goal"][n:])).to(device)
+            "img": torch.tensor(encode_state(select_by_indices(dataset_tmp["img"], test_indices))).to(device),
+            "prev_img": add_previous_image(torch.tensor(encode_state(select_by_indices(dataset_tmp["img"], test_indices)))).to(device),
+            "action": torch.tensor(encode_action(select_by_indices(dataset_tmp["action"], test_indices)), dtype=torch.float).to(device),
+            "goal_img": torch.tensor(encode_state(select_by_indices(dataset_tmp["goal_img"], test_indices))).to(device),
+            "goal": torch.tensor(encode_txt(select_by_indices(dataset_tmp["goal"], test_indices))).to(device)
         }
     }
 
