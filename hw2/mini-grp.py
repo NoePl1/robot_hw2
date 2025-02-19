@@ -299,7 +299,6 @@
         chars = sorted(list(set([item for row in dataset_tmp["goal"] for item in row]))) ## Flatten to a long string
         cfg.vocab_size = len(chars)
         shortest_text_len = min([len(txt) for txt in dataset_tmp["goal"]])
-        largest_text_len = max([len(txt) for txt in dataset_tmp["goal"]])
         # create a mapping from characters to integers
         stoi = { ch:i for i,ch in enumerate(chars) }
         itos = { i:ch for i,ch in enumerate(chars) }
@@ -313,7 +312,7 @@
         def encode_txt(data):
             if cfg.use_T5:
                 cfg.vocab_size = tokenizer.vocab_size
-                encoded_txt = tokenizer(data, padding=largest_text_len, return_tensors='pt')
+                encoded_txt = tokenizer(data, padding="longest", return_tensors='pt')
                 return encoded_txt.input_ids
             else:
                 cfg.block_size = shortest_text_len
@@ -367,7 +366,7 @@
             return np.array(data)[indices]
 
         n = int(0.9 * len(dataset_tmp["img"]))  # first 90% will be train, rest val
-
+        dataset_tmp["goal"] = encode_txt(dataset_tmp["goal"])
         dataset_tmp = {
             "train":
                 {
@@ -376,7 +375,7 @@
                                            dtype=torch.float).to(device),
                     "goal_img": torch.tensor(
                         encode_state(select_by_indices(dataset_tmp["goal_img"], train_indices))).to(device),
-                    "goal": torch.tensor(encode_txt(select_by_indices(dataset_tmp["goal"], train_indices))).to(device)
+                    "goal": torch.tensor(select_by_indices(dataset_tmp["goal"], train_indices)),
                 },
             "test":
                 {
@@ -385,7 +384,7 @@
                                            dtype=torch.float).to(device),
                     "goal_img": torch.tensor(encode_state(select_by_indices(dataset_tmp["goal_img"], test_indices))).to(
                         device),
-                    "goal": torch.tensor(encode_txt(select_by_indices(dataset_tmp["goal"], test_indices))).to(device)
+                    "goal": torch.tensor(select_by_indices(dataset_tmp["goal"], test_indices)),
                 }
         }
 
